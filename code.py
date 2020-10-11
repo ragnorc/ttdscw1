@@ -1,5 +1,6 @@
 #%%
 from collections import defaultdict
+from lark import Lark, tree, Transformer, v_args
 import xmltodict 
 import re
 import nltk
@@ -11,6 +12,47 @@ def tokenize(str):
 def remove_stop_words(words):
     stop_words = set(line.strip() for line in open('stop_words.txt'))
     return [word for word in words if word not in stop_words]
+
+
+@v_args(inline=True)
+class QueryParser(Transformer):
+    def __init__(self, index):
+        super().__init__(visit_tokens=True)
+        self.index = index
+
+    def __default_token__(self, token):
+        if token.type == 'TERM':
+            return set(self.index.search(token.value).keys())
+
+        if token.type == 'PHRASE':
+            matches = set()
+            terms = token.value.replace('"','').split()
+            results = [self.index.search(terms[0]), self.index.search(terms[1])]
+            intersection = set(results[0].keys()).intersection(results[1].keys())
+            for docID in intersection:
+                for pos in results[0][docID]:
+                    if pos+1 in results[1][docID]:
+                        matches.add(docID)
+                            
+                #print("matches:")
+                #print(matches)
+            return matches
+        else:
+            return token.value
+
+    def negation(self, results):
+        return self.index.docIDs.difference(set(results))
+
+
+    def boolean(self, left, operator, right):
+        print(operator)
+        if operator == "OR":
+            return left.union(right)
+        elif operator == "AND":
+            return left.intersection(right)
+        
+    def query(self, value):
+        return value
 
 
 
@@ -43,8 +85,6 @@ class Index():
             print(nltk.stem.PorterStemmer().stem(term))
             return self.index[nltk.stem.PorterStemmer().stem(term)]
 
-    
-
 
         def write_to_file(self, file="index.txt"):
 
@@ -54,7 +94,6 @@ class Index():
                 fout.write(term + ':'+ str(len(documents)) + '\n')
                 for docID, positions in documents.items():
                     fout.write('\t' + docID + ': '+ ','.join(map(str, positions))  + '\n')
-
 
             fout.close()
 
@@ -70,70 +109,33 @@ with open('queries.boolean.txt', 'r') as file:
             print(re.findall('\"[\s\w]+\"|[\w]+', query))
 
 # %%
-from lark import Lark, tree, Transformer, v_args
-
-grammar = """
-    query: PHRASE | TERM | boolean | negation
-    boolean: query OPERATOR query
-    PHRASE: /\"[\s\w]+\"/
-    TERM: /[\w]+/
-    OPERATOR: "OR" | "AND"
-    negation: "NOT" query
-    %import common.WS
-    %ignore WS
-"""
-parser = Lark(grammar, start='query')
-parse_tree = parser.parse('retain OR NOT dencora')
-
-@v_args(inline=True)
-class QueryProcessor(Transformer):
-    def __init__(self, index):
-        super().__init__(visit_tokens=True)
-        self.index = index
-
-    def __default_token__(self, token):
-        if token.type == 'TERM':
-            return set(self.index.search(token.value).keys())
-
-        if token.type == 'PHRASE':
-            matches = set()
-            terms = token.value.replace('"','').split()
-            results = [self.index.search(terms[0]), self.index.search(terms[1])]
-            intersection = set(results[0].keys()).intersection(results[1].keys())
-            for docID in intersection:
-                for pos in results[0][docID]:
-                    if pos+1 in results[1][docID]:
-                        matches.add(docID)
-                        
-            #print("matches:")
-            #print(matches)
-            return matches
-        else:
-             return token.value
-
-    def negation(self, results):
-        return self.index.docIDs.difference(set(results))
 
 
-    def boolean(self, left, operator, right):
-        print(operator)
-        if operator == "OR":
-            return left.union(right)
-        elif operator == "AND":
-            return left.intersection(right)
-        elif operator == "AND NOT":
-            return left.difference(right)
-        elif operator == "OR NOT":
-            return left.difference(right)
+
+
+
+
+class QueryEngine():
+
+    def __init__(self):
+        grammar = """
+        query: PHRASE | TERM | boolean | negation
+        boolean: query OPERATOR query
+        PHRASE: /\"[\s\w]+\"/
+        TERM: /[\w]+/
+        OPERATOR: "OR" | "AND"
+        negation: "NOT" query
+        %import common.WS
+        %ignore WS
+        """
+        self.parser = Lark(grammar, start='query')
     
-    def query(self, tree):
-        return tree
+    
+    def query(self, index, q):
+        processor = QueryParser(index)
+        return processor.transform(self.parser.parse(q))
 
 
-
-
-print(len(QueryProcessor(index).transform(parse_tree)))
-
-#def eval(tree):
-#print(parse_tree.children[0])
+# %%
+len(QueryEngine().query(index, "NOT dencora"))
 # %%
