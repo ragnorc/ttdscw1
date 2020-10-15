@@ -4,10 +4,11 @@ from lark import Lark, tree, Transformer, v_args
 import xmltodict 
 import re
 import nltk
+import math
 
 
 def tokenize(str):
-    return re.findall("[A-Z]{2,}(?![a-z])|[A-Z][a-z]+(?=[A-Z])|[\w][\w\'\-]*", str)
+    return [token.lstrip("'").rstrip("'") for token in re.findall("[\d]+[\.]?[\d]+|[\w][\w\'\-]*", str)]
 
 def remove_stop_words(words):
     stop_words = set(line.strip() for line in open('stop_words.txt'))
@@ -22,7 +23,7 @@ class QueryParser(Transformer):
 
     def __default_token__(self, token):
         if token.type == 'TERM':
-            return set(self.index.search(token.value).keys())
+            return self.index.search(token.value)
 
         if token.type == 'PHRASE':
             matches = set()
@@ -42,16 +43,24 @@ class QueryParser(Transformer):
     def negation(self, results):
         return self.index.docIDs.difference(set(results))
 
+    def proximity(self, num, results1, results2):
+        matches = set()
+        intersection =  set(results1.keys()).intersection(set(results2.keys()))
+        for docID in intersection:
+            if len([abs(int(i)-int(j)) <= int(num) for i in results1[docID] for j in results2[docID]]) > 0:
+                matches.add(docID)
+        return matches
 
     def boolean(self, left, operator, right):
-        print(operator)
         if operator == "OR":
             return left.union(right)
         elif operator == "AND":
             return left.intersection(right)
         
-    def query(self, value):
-        return value
+    def query(self, results):
+        if isinstance(results, dict):
+            return set(results.keys())
+        return results
 
 
 
@@ -118,10 +127,12 @@ class QueryEngine():
 
     def __init__(self):
         grammar = """
-        query: PHRASE | TERM | boolean | negation
+        query: PHRASE | TERM | boolean | negation | proximity
+        proximity: "#"NUM"("TERM","TERM")"
         boolean: query OPERATOR query
+        NUM: /[\d]+/
         PHRASE: /\"[\s\w]+\"/
-        TERM: /[\w]+/
+        TERM: /[\w][\w\-\']*/
         OPERATOR: "OR" | "AND"
         negation: "NOT" query
         %import common.WS
@@ -133,6 +144,7 @@ class QueryEngine():
     def query(self, index, q):
         processor = QueryParser(index)
         return processor.transform(self.parser.parse(q))
+
 
 
 # %%
