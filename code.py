@@ -27,15 +27,14 @@ class QueryParser(Transformer):
         if token.type == 'PHRASE':
             matches = set()
             terms = token.value.replace('"','').split()
-            results = [self.index.search(terms[0]), self.index.search(terms[1])]
-            intersection = set(results[0].keys()).intersection(results[1].keys())
+            results = [self.index.search(term) for term in terms]
+            intersection =  set.intersection(*[set(result.keys()) for result in results])
             for docID in intersection:
+                print(docID)
                 for pos in results[0][docID]:
-                    if pos+1 in results[1][docID]:
+                    if all([pos+i in results[i][docID] for i in range(1, len(terms))]):
                         matches.add(docID)
-                            
-                #print("matches:")
-                #print(matches)
+                        break
             return matches
         else:
             return token.value
@@ -137,5 +136,5 @@ class QueryEngine():
 
 
 # %%
-len(QueryEngine().query(index, "NOT dencora"))
+len(QueryEngine().query(index, '"middle east"'))
 # %%
