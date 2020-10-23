@@ -16,7 +16,12 @@ def remove_stop_words(words):
 
 
 @v_args(inline=True)
-class QueryParser(Transformer):
+class QueryEvaluator(Transformer):
+    """
+    This class defines the query evaluator. It receives a syntax tree of the query and 
+    evaluates the leafs in a bottom up fashion.
+    """
+
     def __init__(self, index):
         super().__init__(visit_tokens=True)
         self.index = index
@@ -66,7 +71,7 @@ class QueryParser(Transformer):
 
 class Index():
 
-        def __init__(self, source='collections/trec.sample.xml'):
+        def __init__(self, source='tre.5000.xml'):
 
             self.index = defaultdict(lambda: defaultdict(list))
             self.docIDs = set()
@@ -105,25 +110,11 @@ class Index():
 
             fout.close()
 
-
-
-
-
-# %%
-with open('queries.boolean.txt', 'r') as file:
-        queries = file.readlines()
-        for query in queries:
-            print(query)
-            print(re.findall('\"[\s\w]+\"|[\w]+', query))
-
-# %%
-
-
-
-
-
-
 class QueryEngine():
+    """
+    Class that defines the grammar of the possible queries and instantiates a parser. 
+    The query methods pass the query string to the parser and then evaluates the returned syntax tree.
+    """
 
     def __init__(self):
         grammar = """
@@ -141,12 +132,55 @@ class QueryEngine():
         self.parser = Lark(grammar, start='query')
     
     
-    def query(self, index, q):
-        processor = QueryParser(index)
+    def boolean_query(self, index, q):
+        processor = QueryEvaluator(index)
         return processor.transform(self.parser.parse(q))
 
+    def ranked_query(self, index, q):
+        df = dict()
+        tf = defaultdict(dict)
+        terms = tokenize(q)
+        for term in terms:
+            results = index.search(term)
+            df[term] = len(results.keys())
+            for docID,positions in results.items():
+                tf[docID][term] = len(positions)
+           
+        scores = {
+            docID: sum([(1 + math.log10(tf[docID][t])) * math.log10(len(index.docIDs)/df[t]) for t in terms if t in tf[docID]])
+
+            for docID in tf.keys()
+        }
+        return scores
+
+    
+    def write_ranked_to_file(self, results, query_id, file="results.ranked.txt"):
+
+        fout = open(file, "a")
+        for docID, score in sorted(results.items(), reverse=True, key=lambda item: item[1]):
+            fout.write( str(query_id) + ',' + docID + ','+ str(score) + '\n')
+        fout.close()
+
+
+    def write_boolean_to_file(self, results, query_id, file="results.boolean.txt"):
+
+        fout = open(file, "a")
+        for docID in sorted(results,  key=lambda item: int(item)):
+            fout.write( str(query_id) + ',' + docID + '\n')
+        fout.close()
 
 
 # %%
-len(QueryEngine().query(index, '"middle east"'))
+index = Index(source='trec.5000.xml')
+q = QueryEngine()
+
 # %%
+index.write_to_file("index.txt")
+
+with open('queries.ranked.txt') as f:
+    for i, line in enumerate(f):
+        q.write_ranked_to_file(q.ranked_query(index, line.strip().split(" ",1)[1]), i+1, "results.ranked.txt")
+
+with open('queries.boolean.txt') as f:
+    for i, line in enumerate(open('queries.boolean.txt')):
+            q.write_boolean_to_file(q.boolean_query(index, line.strip().split(" ",1)[1]), i+1, "results.boolean.txt")
