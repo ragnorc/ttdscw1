@@ -5,6 +5,7 @@ import xmltodict
 import re
 import nltk
 import math
+import os
 
 
 def tokenize(str):
@@ -13,6 +14,47 @@ def tokenize(str):
 def remove_stop_words(words):
     stop_words = set(line.strip() for line in open('stop_words.txt'))
     return [word for word in words if word not in stop_words]
+
+
+
+
+class Index():
+
+        def __init__(self, source='tre.5000.xml'):
+
+            self.index = defaultdict(lambda: defaultdict(list))
+            self.docIDs = set()
+            with open(source, 'r') as file:
+                xml = file.read()
+
+            documents = xmltodict.parse(xml)["document"]["DOC"]
+            for document in documents:
+                self.docIDs.add(document["DOCNO"])
+                # Tokenize the document
+                tokens = [token.lower() for section in ["HEADLINE","TEXT","PUB","PAGE"] for token in tokenize(document[section])]
+                # Remove stop words
+                filtered_tokens = remove_stop_words(tokens)
+
+                stems = [nltk.stem.PorterStemmer().stem(token) for token in filtered_tokens ]
+
+                for i, stem in enumerate(stems):
+                    self.index[stem][document["DOCNO"]].append(i+1) 
+        
+
+        def search(self, term):
+            return self.index[nltk.stem.PorterStemmer().stem(term)]
+
+
+        def write_to_file(self, file="index.txt"):
+
+            fout = open(file, "w")
+
+            for term, documents in sorted(self.index.items()):
+                fout.write(term + ':'+ str(len(documents)) + '\n')
+                for docID, positions in documents.items():
+                    fout.write('\t' + docID + ': '+ ','.join(map(str, positions))  + '\n')
+
+            fout.close()
 
 
 @v_args(inline=True)
@@ -35,8 +77,7 @@ class QueryEvaluator(Transformer):
             terms = token.value.replace('"','').split()
             results = [self.index.search(term) for term in terms]
             intersection =  set.intersection(*[set(result.keys()) for result in results])
-            for docID in intersection:
-                print(docID)
+            for docID in intersection: 
                 for pos in results[0][docID]:
                     if all([pos+i in results[i][docID] for i in range(1, len(terms))]):
                         matches.add(docID)
@@ -68,47 +109,6 @@ class QueryEvaluator(Transformer):
         return results
 
 
-
-class Index():
-
-        def __init__(self, source='tre.5000.xml'):
-
-            self.index = defaultdict(lambda: defaultdict(list))
-            self.docIDs = set()
-            with open(source, 'r') as file:
-                xml = file.read()
-
-            documents = xmltodict.parse(xml)["document"]["DOC"]
-            print(len(documents))
-            for document in documents:
-                self.docIDs.add(document["DOCNO"])
-                # Tokenize the document
-                tokens = [token.lower() for section in ["HEADLINE","TEXT","PUB","PAGE"] for token in tokenize(document[section])]
-                #print(tokens)
-                # Remove stop words
-                filtered_tokens = remove_stop_words(tokens)
-
-                stems = [nltk.stem.PorterStemmer().stem(token) for token in filtered_tokens ]
-
-                for i, stem in enumerate(stems):
-                    self.index[stem][document["DOCNO"]].append(i+1) 
-        
-
-        def search(self, term):
-            print(nltk.stem.PorterStemmer().stem(term))
-            return self.index[nltk.stem.PorterStemmer().stem(term)]
-
-
-        def write_to_file(self, file="index.txt"):
-
-            fout = open(file, "w")
-
-            for term, documents in sorted(self.index.items()):
-                fout.write(term + ':'+ str(len(documents)) + '\n')
-                for docID, positions in documents.items():
-                    fout.write('\t' + docID + ': '+ ','.join(map(str, positions))  + '\n')
-
-            fout.close()
 
 class QueryEngine():
     """
@@ -157,7 +157,7 @@ class QueryEngine():
     def write_ranked_to_file(self, results, query_id, file="results.ranked.txt"):
 
         fout = open(file, "a")
-        for docID, score in sorted(results.items(), reverse=True, key=lambda item: item[1]):
+        for docID, score in sorted(results.items(), reverse=True, key=lambda item: item[1])[:150]:
             fout.write( str(query_id) + ',' + docID + ','+ str(score) + '\n')
         fout.close()
 
@@ -171,16 +171,27 @@ class QueryEngine():
 
 
 # %%
+try:
+    os.remove("index.txt")
+    os.remove("results.ranked.txt")
+    os.remove("results.boolean.txt")
+except OSError:
+    pass
+
+print("Building index ...")
 index = Index(source='trec.5000.xml')
 q = QueryEngine()
 
-# %%
 index.write_to_file("index.txt")
 
+print("Executing  ranked queries ...")
 with open('queries.ranked.txt') as f:
     for i, line in enumerate(f):
         q.write_ranked_to_file(q.ranked_query(index, line.strip().split(" ",1)[1]), i+1, "results.ranked.txt")
 
+print("Executing  boolean queries ...")
 with open('queries.boolean.txt') as f:
     for i, line in enumerate(open('queries.boolean.txt')):
             q.write_boolean_to_file(q.boolean_query(index, line.strip().split(" ",1)[1]), i+1, "results.boolean.txt")
+
+print("Queries were successfully executed.")
